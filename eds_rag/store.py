@@ -134,6 +134,9 @@ class SchemaStore:
             self._set_meta("embedder", embedder.name)
             self._set_meta("built_at", datetime.now(timezone.utc).isoformat())
             self._set_meta("doc_count", str(len(docs)))
+            # Row ids are reassigned on every rebuild; readers holding caches
+            # (a long-running MCP server) compare this to know they're stale.
+            self._set_meta("generation", str(int(self.meta("generation") or 0) + 1))
         self._matrix = None
         return {"docs": len(docs), "embedded": len(todo), "reused": len(docs) - len(todo)}
 
@@ -176,6 +179,13 @@ class SchemaStore:
             (q, limit),
         ).fetchall()
         return [(r[0], -float(r[1])) for r in rows]
+
+    def generation(self) -> int:
+        return int(self.meta("generation") or 0)
+
+    def invalidate(self) -> None:
+        """Drop the in-memory vector matrix so the next search reloads it."""
+        self._matrix = None
 
     def close(self) -> None:
         self.conn.close()

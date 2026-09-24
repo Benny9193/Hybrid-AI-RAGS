@@ -65,7 +65,7 @@ SELECT i.object_id, i.name, i.type_desc, i.is_unique, i.is_primary_key,
               JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
               WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id
               ORDER BY ic.is_included_column, ic.key_ordinal
-              FOR XML PATH('')), 1, 2, '') AS cols
+              FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, 2, '') AS cols
 FROM sys.indexes i
 JOIN sys.objects o ON o.object_id = i.object_id AND o.type IN ('U', 'V') AND o.is_ms_shipped = 0
 WHERE i.index_id > 0 AND i.is_hypothetical = 0

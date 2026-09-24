@@ -70,3 +70,33 @@ def test_gotchas_from_rules(retriever):
     assert "Manufacturor" in text and "`IsActive`" in text and "High-volume" in text
     assert "`Active`" in retriever.resolve("Vendors").render()
     assert "cold historical storage" in retriever.resolve("archive.PO").render()
+
+
+def test_retriever_picks_up_index_rebuilt_by_another_process(tmp_path, docs):
+    # Simulates `eds-rag refresh --apply` (cron) rebuilding the index while the
+    # MCP server keeps its own connection + caches open.
+    from eds_rag.embeddings import HashingEmbedder
+    from eds_rag.retrieval import SchemaRetriever
+    from eds_rag.store import SchemaStore
+
+    path = tmp_path / "idx.db"
+    emb = HashingEmbedder()
+    SchemaStore(path).rebuild(docs, emb)
+    server_side = SchemaRetriever(SchemaStore(path), emb)
+    assert names(server_side.search("CrossRefs", top_k=1)) == ["dbo.CrossRefs"]
+
+    # Rebuild from a separate connection with a different row order, so every
+    # doc gets a different rowid than before.
+    SchemaStore(path).rebuild(list(reversed(docs)), emb)
+    assert names(server_side.search("CrossRefs", top_k=1)) == ["dbo.CrossRefs"]
+    assert names(server_side.search("vendor price for an item", top_k=3))[0] == "dbo.CrossRefs"
+    assert server_side.resolve("PO").full_name == "dbo.PO"
+
+
+def test_catalog_views_are_not_unknown_tables(retriever):
+    tree = sqlglot.parse_one(
+        "SELECT c.name FROM sys.columns c JOIN INFORMATION_SCHEMA.TABLES t ON 1=1", read="tsql"
+    )
+    known, unknown = retriever.check_tables(list(tree.find_all(exp.Table)))
+    assert known == [] and unknown == {}
+

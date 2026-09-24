@@ -24,6 +24,9 @@ from .models import TableDoc
 from .store import SchemaStore
 
 HISTORY_WORDS = re.compile(r"\b(archive[ds]?|histor(y|ical)|old|prior years?|purged)\b", re.I)
+# Catalog views the read-only login can always query to confirm the schema.
+# They aren't in the index, so they're exempt from the unknown-table check.
+CATALOG_SCHEMAS = frozenset({"sys", "information_schema"})
 
 
 @dataclass
@@ -44,16 +47,26 @@ def rrf(rankings: list[list[int]], k: int = 60) -> dict[int, float]:
 
 class SchemaRetriever:
     def __init__(self, store: SchemaStore, embedder: Embedder, candidates: int = 50):
-        built_with = store.meta("embedder")
-        if built_with and built_with != embedder.name:
-            raise ValueError(
-                f"index was built with embedder {built_with!r} but {embedder.name!r} was "
-                "requested - rebuild the index or set EDS_RAG_EMBEDDER to match"
-            )
         self.store = store
         self.embedder = embedder
         self.candidates = candidates
+        self._generation: int | None = None
+        self._ensure_fresh()
+
+    def _ensure_fresh(self) -> None:
+        """Reload caches if the index was rebuilt (e.g. by the refresh cron)."""
+        generation = self.store.generation()
+        if generation == self._generation:
+            return
+        built_with = self.store.meta("embedder")
+        if built_with and built_with != self.embedder.name:
+            raise ValueError(
+                f"index was built with embedder {built_with!r} but {self.embedder.name!r} was "
+                "requested - rebuild the index or set EDS_RAG_EMBEDDER to match"
+            )
+        self.store.invalidate()
         self._refresh_cache()
+        self._generation = generation
 
     def _refresh_cache(self) -> None:
         self.docs: dict[int, TableDoc] = {}
@@ -68,6 +81,7 @@ class SchemaRetriever:
     # ------------------------------------------------------------ lookups
     def resolve(self, name: str) -> TableDoc | None:
         """Resolve ``Vendors`` / ``[dbo].[Vendors]`` / ``EDS.dbo.Vendors``."""
+        self._ensure_fresh()
         parts = [p.strip("[]\" ") for p in name.strip().split(".") if p.strip()]
         if not parts:
             return None
@@ -100,6 +114,8 @@ class SchemaRetriever:
         known: list[TableDoc] = []
         unknown: dict[str, list[str]] = {}
         for t in tables:
+            if t.db.lower() in CATALOG_SCHEMAS:
+                continue
             qualified = ".".join(p for p in (t.db, t.name) if p)
             doc = self.resolve(qualified)
             if doc:
@@ -117,6 +133,7 @@ class SchemaRetriever:
         expand_related: bool = True,
         max_related: int = 3,
     ) -> list[SearchHit]:
+        self._ensure_fresh()
         vec = self.store.vector_search(self.embedder.embed_query(query), self.candidates)
         kw = self.store.keyword_search(query, self.candidates)
         exact = [
