@@ -1,0 +1,212 @@
+# Human-curated annotations for the EDS schema.
+#
+# This is the "seed corpus": the knowledge the live catalog can't tell you
+# (what a table *means* in procurement terms, synonyms people use, gotchas).
+# At index-build time these annotations are merged onto the introspected
+# tables. Anything here that no longer matches the live schema (a table that
+# disappeared, a join column that was renamed) is flagged by `eds-rag refresh`.
+#
+# Only facts we're confident about live here. `expected_joins` follow the
+# EDS `{Table}Id` naming convention; they are rendered as "verify" until a
+# declared FK or introspection confirms the column exists.
+
+rules:
+  # Applied to every table/view that has a column with this exact name.
+  column_gotchas:
+    Manufacturor: >-
+      Column is spelled `Manufacturor` (sic) - not `Manufacturer`. Use the
+      misspelling or the query will fail.
+  # Applied to tables that carry a soft-delete / active flag. The rule text
+  # is formatted with the column the table actually uses.
+  active_flag_columns: [Active, IsActive]
+  active_flag_gotcha: >-
+    Active-flag column here is `{column}` (EDS mixes `Active` and `IsActive`
+    across tables - don't assume). Filter `{column} = 1` for live records.
+  schema_gotchas:
+    archive: >-
+      archive.* is cold historical storage: usually no PK and no indexes, so
+      every predicate is a scan. Always TOP + tight filters, never join two
+      archive tables unfiltered, never write here. Prefer the dbo table unless
+      you need history.
+  high_volume_gotcha: >-
+    High-volume table: always filter on an indexed key (or date) and use TOP
+    for exploration. WITH (NOLOCK) is acceptable for quick looks but not for
+    financial / reconciliation-grade numbers.
+
+domains:
+  procurement:
+    description: >-
+      Purchasing workflow. A Requisition (dbo.Requisitions) is a request to buy;
+      its line items live in dbo.Detail. Requisitions route through
+      dbo.Approvals. Once approved, a requisition converts 1:1 into a purchase
+      order (dbo.PO) whose lines are dbo.PODetailItems.
+      Chain: Requisitions -> Detail -> Approvals -> PO -> PODetailItems.
+    aliases: [purchasing, requisition workflow, purchase order lifecycle]
+  catalog:
+    description: >-
+      Vendor catalogs and pricing. dbo.Vendors own catalogs (dbo.Catalog);
+      dbo.CrossRefs maps vendor catalog items to master products (dbo.Items)
+      and carries the PRICE; dbo.Category classifies items. Catalog changes
+      normally arrive through vendor uploads, not direct writes.
+      Chain: Vendors -> Catalog -> CrossRefs -> Items -> Category.
+    aliases: [pricing, vendor catalog, crosswalk, product master]
+  bidding:
+    description: >-
+      Cooperative bids / RFPs. dbo.BidHeaders is the bid (RFP) itself;
+      dbo.BidRequestItems is what was asked for and dbo.BidHeaderDetail holds
+      item specs. Vendors respond in dbo.Bids, their line responses are in
+      dbo.BidResults, and winners are recorded in dbo.Awards.
+      Chain: BidHeaders -> BidRequestItems + BidHeaderDetail -> Bids -> BidResults -> Awards.
+    aliases: [rfp, solicitation, bid award, cooperative bid]
+  organization:
+    description: >-
+      Member hierarchy: dbo.District (co-op member entity, budgets attach
+      here) -> dbo.School -> dbo.Users.
+    aliases: [co-op members, districts, schools, members, hierarchy]
+
+tables:
+  # ---------------------------------------------------------- procurement
+  dbo.Requisitions:
+    domain: procurement
+    description: >-
+      A request to purchase, created by a user at a school/district. Header
+      record for requisition line items (dbo.Detail). Goes through approval and
+      converts 1:1 into a PO.
+    aliases: [requisition, req, purchase request, order request]
+  dbo.Detail:
+    domain: procurement
+    approx_rows: 30000000
+    description: >-
+      Requisition line items (one row per item requested on a requisition).
+      Named generically - "Detail" means requisition detail.
+    aliases: [requisition lines, requisition line items, req detail, line items]
+    expected_joins:
+      - {column: RequisitionId, ref: dbo.Requisitions.RequisitionId}
+  dbo.Approvals:
+    domain: procurement
+    description: >-
+      Approval routing / approval steps for requisitions. Use to find pending
+      or approved requisitions and approval cycle time.
+    aliases: [approval, approval queue, pending approvals, approver]
+    expected_joins:
+      - {column: RequisitionId, ref: dbo.Requisitions.RequisitionId}
+  dbo.PO:
+    domain: procurement
+    description: >-
+      Purchase order header. Created from an approved requisition (1:1 after
+      conversion).
+    aliases: [purchase order, purchase orders, po header, orders]
+    expected_joins:
+      - {column: RequisitionId, ref: dbo.Requisitions.RequisitionId}
+  dbo.PODetailItems:
+    domain: procurement
+    approx_rows: 24000000
+    description: Purchase order line items.
+    aliases: [po lines, po line items, purchase order detail, order lines]
+    expected_joins:
+      - {column: POId, ref: dbo.PO.POId}
+
+  # -------------------------------------------------------------- catalog
+  dbo.Vendors:
+    domain: catalog
+    description: >-
+      Vendor (supplier) master record. Bulk changes propagate system-wide -
+      treat as master data.
+    aliases: [vendor, supplier, suppliers, seller]
+  dbo.Catalog:
+    domain: catalog
+    description: A vendor's catalog (a published price list / product set).
+    aliases: [vendor catalog, price list, catalogs]
+    expected_joins:
+      - {column: VendorId, ref: dbo.Vendors.VendorId}
+  dbo.CrossRefs:
+    domain: catalog
+    approx_rows: 150000000
+    description: >-
+      Vendor-item mapping: links a vendor's catalog item to the master
+      product in dbo.Items. PRICING LIVES HERE. Largest table in EDS - never
+      scan it. Normal changes arrive via vendor catalog uploads, not direct
+      writes.
+    aliases: [crosswalk, cross reference, vendor item, vendor price, item price, pricing]
+    expected_joins:
+      - {column: VendorId, ref: dbo.Vendors.VendorId}
+      - {column: CatalogId, ref: dbo.Catalog.CatalogId}
+      - {column: ItemId, ref: dbo.Items.ItemId}
+  dbo.Items:
+    domain: catalog
+    approx_rows: 30000000
+    description: Master product / item records shared across vendors.
+    aliases: [item, product, products, sku, master item]
+    expected_joins:
+      - {column: CategoryId, ref: dbo.Category.CategoryId}
+  dbo.Category:
+    domain: catalog
+    description: Item categories / classification.
+    aliases: [categories, item category, product category, commodity code]
+
+  # -------------------------------------------------------------- bidding
+  dbo.BidHeaders:
+    domain: bidding
+    description: >-
+      A bid / RFP / solicitation header (the cooperative bid itself, not a
+      vendor's response - that's dbo.Bids).
+    aliases: [bid, rfp, solicitation, bid header, request for proposal]
+  dbo.BidRequestItems:
+    domain: bidding
+    description: Items requested on a bid (what the co-op asked vendors to price).
+    aliases: [bid items, requested items, bid request lines]
+    expected_joins:
+      - {column: BidHeaderId, ref: dbo.BidHeaders.BidHeaderId}
+  dbo.BidHeaderDetail:
+    domain: bidding
+    approx_rows: 123000000
+    description: Item specifications / detail lines for a bid header. Very large.
+    aliases: [bid specs, bid detail, bid item specifications]
+    expected_joins:
+      - {column: BidHeaderId, ref: dbo.BidHeaders.BidHeaderId}
+  dbo.Bids:
+    domain: bidding
+    description: >-
+      A vendor's submission against a bid header (vendor response). Not the
+      RFP itself - that's dbo.BidHeaders.
+    aliases: [vendor bid, bid submission, bid response, vendor response]
+    expected_joins:
+      - {column: BidHeaderId, ref: dbo.BidHeaders.BidHeaderId}
+      - {column: VendorId, ref: dbo.Vendors.VendorId}
+  dbo.BidResults:
+    domain: bidding
+    description: Line-level results / vendor responses per bid item.
+    aliases: [bid results, bid line responses, bid pricing]
+    expected_joins:
+      - {column: BidId, ref: dbo.Bids.BidId}
+  dbo.Awards:
+    domain: bidding
+    description: Bid awards - which vendor won which bid / line.
+    aliases: [award, awarded, winning bid, contract award]
+    expected_joins:
+      - {column: BidHeaderId, ref: dbo.BidHeaders.BidHeaderId}
+      - {column: VendorId, ref: dbo.Vendors.VendorId}
+
+  # --------------------------------------------------------- organization
+  dbo.District:
+    domain: organization
+    approx_rows: 3500
+    description: >-
+      Member entity (school district or other public entity in the co-op).
+      Budgets attach at this level. Master data - no bulk writes.
+    aliases: [district, districts, member, co-op member, entity, customer]
+  dbo.School:
+    domain: organization
+    approx_rows: 12900
+    description: A school / site within a district.
+    aliases: [school, schools, site, campus, building]
+    expected_joins:
+      - {column: DistrictId, ref: dbo.District.DistrictId}
+  dbo.Users:
+    domain: organization
+    approx_rows: 28600
+    description: Application users (requesters, approvers, admins).
+    aliases: [user, users, requester, approver, staff]
+    expected_joins:
+      - {column: SchoolId, ref: dbo.School.SchoolId}
+      - {column: DistrictId, ref: dbo.District.DistrictId}
