@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "eds-schema": {
+      "command": "eds-rag",
+      "args": ["serve"],
+      "env": {
+        "EDS_RAG_INDEX": "/opt/eds-rag/data/eds_schema.db",
+        "EDS_SQL_CONN": "Driver={ODBC Driver 18 for SQL Server};Server=tcp:eds-sql.example.internal,1433;Database=EDS;UID=eds_rag_reader;PWD=${EDS_RAG_READER_PASSWORD};Encrypt=yes;ApplicationIntent=ReadOnly",
+        "EDS_MAX_ROWS": "1000",
+        "EDS_QUERY_TIMEOUT": "10",
+        "EDS_AUDIT_LOG": "/var/log/eds-rag/audit.jsonl"
+      }
+    }
+  }
+}
