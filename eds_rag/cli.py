@@ -10,7 +10,7 @@ from .config import Settings
 from .embeddings import get_embedder
 from .introspect import introspect, load_snapshot, save_snapshot
 from .models import TableDoc
-from .refresh import diff_docs
+from .refresh import diff_docs, docs_differ
 from .seed import Seed, merge
 from .store import SchemaStore
 
@@ -63,7 +63,8 @@ def cmd_refresh(args, settings: Settings) -> int:
         save_snapshot(new, args.snapshot_out)
     store = SchemaStore(index)
     merged = merge(new, Seed.load(args.seed or settings.seed_path))
-    report = diff_docs(store.all_docs(), merged.docs)
+    stored = store.all_docs()
+    report = diff_docs(stored, merged.docs)
     report.stale_annotations = merged.stale_annotations
     text = report.to_markdown()
     if args.report:
@@ -71,7 +72,9 @@ def cmd_refresh(args, settings: Settings) -> int:
         Path(args.report).write_text(text + "\n")
         print(f"report written to {args.report}")
     print(text)
-    if args.apply and (report.has_drift or report.changed):
+    # Rebuild whenever the merged docs differ from what's stored - that includes
+    # seed-only edits (descriptions, aliases, gotchas), which aren't schema drift.
+    if args.apply and docs_differ(stored, merged.docs):
         stats = store.rebuild(merged.docs, get_embedder(args.embedder or settings.embedder))
         print(f"index rebuilt: {stats['embedded']} re-embedded, {stats['reused']} reused")
     return EXIT_DRIFT if report.has_drift else 0
@@ -119,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     def common(sp, source: bool = False):
         sp.add_argument("--index", help="SQLite index path (default $EDS_RAG_INDEX or data/eds_schema.db)")
         sp.add_argument("--embedder", help="hashing | fastembed[:model] | voyage[:model]")
-        sp.add_argument("--seed", help="seed annotations YAML (default seed/eds_seed.yaml)")
+        sp.add_argument("--seed", help="seed annotations YAML (default: the packaged eds_rag/data/eds_seed.yaml)")
         if source:
             g = sp.add_mutually_exclusive_group()
             g.add_argument("--snapshot", help="introspection snapshot JSON to use instead of a live DB")

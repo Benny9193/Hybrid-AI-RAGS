@@ -28,7 +28,7 @@ eds-rag = "eds_rag.cli:main"
 include = ["eds_rag*"]
 
 [tool.setuptools.package-data]
-eds_rag = ["py.typed"]
+eds_rag = ["py.typed", "data/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

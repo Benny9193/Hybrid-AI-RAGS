@@ -93,3 +93,36 @@ def test_rebuild_reuses_unchanged_embeddings():
     docs[0].columns.append(Column("NewCol", "int"))
     second = store.rebuild(docs, emb)
     assert second["embedded"] == 1 and second["reused"] == len(docs) - 1
+
+
+def test_refresh_apply_publishes_seed_only_edits(tmp_path):
+    import yaml
+
+    from eds_rag.cli import main
+    from eds_rag.seed import DEFAULT_SEED
+
+    snap, index, seed = tmp_path / "snap.json", tmp_path / "idx.db", tmp_path / "seed.yaml"
+    save_snapshot(fake_schema(), snap)
+    # Keep only annotations for tables that exist, so nothing else counts as drift.
+    raw = yaml.safe_load(DEFAULT_SEED.read_text())
+    present = {d.full_name for d in fake_schema()}
+    raw["tables"] = {k: v for k, v in raw["tables"].items() if k in present}
+    seed.write_text(yaml.safe_dump(raw))
+    assert main(["build-index", "--snapshot", str(snap), "--index", str(index), "--seed", str(seed)]) == 0
+
+    raw = yaml.safe_load(seed.read_text())
+    raw["tables"]["dbo.Vendors"]["description"] = "Edited vendor description."
+    seed.write_text(yaml.safe_dump(raw))
+    # Seed edit only - no schema change - yet --apply must publish it.
+    code = main(["refresh", "--snapshot", str(snap), "--index", str(index), "--seed", str(seed), "--apply"])
+    assert code == 0  # not schema drift
+
+    vendors = next(d for d in SchemaStore(index).all_docs() if d.full_name == "dbo.Vendors")
+    assert vendors.description == "Edited vendor description."
+
+
+def test_missing_seed_file_is_an_error(tmp_path):
+    import pytest
+
+    with pytest.raises(FileNotFoundError):
+        Seed.load(tmp_path / "nope.yaml")

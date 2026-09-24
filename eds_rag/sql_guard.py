@@ -165,6 +165,14 @@ class SqlGuard:
             if t.catalog and t.catalog.lower() in BLOCKED_DATABASES:
                 res.errors.append(f"system database access not allowed: {t.catalog}")
                 continue
+            if t.catalog:
+                # The login may be able to read other databases on the instance;
+                # stay inside the connected (indexed) one.
+                res.errors.append(
+                    f"cross-database (3-part) name not allowed: {t.sql('tsql')}; "
+                    "use schema.table in the connected database"
+                )
+                continue
             if t.name.lower() in cte_names and not t.db:
                 continue
             res.tables.append(t)

@@ -34,6 +34,9 @@ guard = SqlGuard(max_rows=100)
         "SELECT * FROM master.sys.databases",
         "SELECT * FROM msdb.dbo.backupset",
         "SELECT * FROM linked.EDS.dbo.PO",
+        "SELECT * FROM OtherDb.dbo.PO",  # another database on the same instance
+        "SELECT * FROM [OtherDb].[dbo].[PO]",
+        "SELECT p.POId FROM dbo.PO p JOIN OtherDb..Vendors v ON 1=1",
         "SELECT xp_cmdshell('dir')",
         "SELECT 1 /* unterminated",
         "SELECT 'unterminated",

@@ -100,3 +100,9 @@ def test_catalog_views_are_not_unknown_tables(retriever):
     known, unknown = retriever.check_tables(list(tree.find_all(exp.Table)))
     assert known == [] and unknown == {}
 
+
+
+def test_check_tables_never_maps_other_database_onto_local_table(retriever):
+    tree = sqlglot.parse_one("SELECT * FROM OtherDb.dbo.PO", read="tsql")
+    known, unknown = retriever.check_tables(list(tree.find_all(exp.Table)))
+    assert known == [] and list(unknown) == ["OtherDb.dbo.PO"]

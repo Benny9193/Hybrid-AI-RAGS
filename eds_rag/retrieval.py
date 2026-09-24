@@ -114,6 +114,10 @@ class SchemaRetriever:
         known: list[TableDoc] = []
         unknown: dict[str, list[str]] = {}
         for t in tables:
+            if t.catalog:
+                # Never map OtherDb.dbo.X onto the indexed dbo.X.
+                unknown[t.sql("tsql")] = []
+                continue
             if t.db.lower() in CATALOG_SCHEMAS:
                 continue
             qualified = ".".join(p for p in (t.db, t.name) if p)

@@ -10,7 +10,8 @@ import yaml
 
 from .models import ForeignKey, TableDoc
 
-DEFAULT_SEED = Path(__file__).resolve().parent.parent / "seed" / "eds_seed.yaml"
+# Shipped inside the package (see pyproject package-data) so wheels include it.
+DEFAULT_SEED = Path(__file__).resolve().parent / "data" / "eds_seed.yaml"
 
 
 @dataclass
@@ -23,7 +24,8 @@ class Seed:
     def load(cls, path: str | Path | None = None) -> "Seed":
         p = Path(path) if path else DEFAULT_SEED
         if not p.exists():
-            return cls()
+            # Fail loudly: an empty seed silently yields a useless index.
+            raise FileNotFoundError(f"seed annotations file not found: {p}")
         raw = yaml.safe_load(p.read_text()) or {}
         return cls(
             rules=raw.get("rules") or {},

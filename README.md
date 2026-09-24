@@ -19,8 +19,8 @@ model drafts SQL ─► run_query / explain_query
 
 | Piece | Where | What it does |
 |---|---|---|
-| Schema corpus | `eds_rag/introspect.py`, `seed/eds_seed.yaml`, `eds_rag/seed.py` | Builds one chunk per table or view from the live catalog: columns and types, PKs, declared FKs, indexes, row count and tier, and `MS_Description`. Curated annotations from the seed are merged on top: a procurement-terms description, synonyms ("purchase order" → `PO`), expected joins and gotchas. It also adds one overview chunk per domain (procurement, catalog, bidding, organization). |
-| Rule-based gotchas | `seed/eds_seed.yaml` → `rules` | Applied to every object automatically. Any table with a `Manufacturor` column gets the typo warning. A table's active-flag note names the column it actually uses (`Active` vs `IsActive`). Tables in `archive.*` get the no-PK/no-index warning, and tables with ≥10M rows get the high-volume warning. |
+| Schema corpus | `eds_rag/introspect.py`, `eds_rag/data/eds_seed.yaml`, `eds_rag/seed.py` | Builds one chunk per table or view from the live catalog: columns and types, PKs, declared FKs, indexes, row count and tier, and `MS_Description`. Curated annotations from the seed are merged on top: a procurement-terms description, synonyms ("purchase order" → `PO`), expected joins and gotchas. It also adds one overview chunk per domain (procurement, catalog, bidding, organization). |
+| Rule-based gotchas | `eds_rag/data/eds_seed.yaml` → `rules` | Applied to every object automatically. Any table with a `Manufacturor` column gets the typo warning. A table's active-flag note names the column it actually uses (`Active` vs `IsActive`). Tables in `archive.*` get the no-PK/no-index warning, and tables with ≥10M rows get the high-volume warning. |
 | Retrieval | `eds_rag/store.py`, `eds_rag/retrieval.py` | SQLite index that stores vectors plus FTS5 BM25, with identifiers split so `PODetailItems` matches "po detail items". Three rankers are fused with Reciprocal Rank Fusion: vector, keyword, and exact table name or alias phrase. `archive.X` is folded into `dbo.X` unless the question is about history. FK neighbours of the top hits are appended so the model sees its join targets. |
 | Second pass | `SchemaRetriever.check_tables` | Parses the draft SQL. Any table the index doesn't know is rejected with "did you mean …" suggestions, so the model looks it up instead of guessing. |
 | MCP tools | `eds_rag/server.py`, `eds_rag/tools.py` | `search_schema`, `get_table_detail`, `run_query`, `explain_query`. All four are marked `readOnlyHint`. |
@@ -30,7 +30,7 @@ model drafts SQL ─► run_query / explain_query
 ### Tools the model gets
 
 - **`search_schema(query, top_k=8)`**: returns markdown chunks for the best-matching tables and views, with columns, joins and gotchas, plus a short list of related join targets.
-- **`get_table_detail(table_name)`**: returns every column, index and gotcha for one table or view, plus `TOP 5` sample rows (with `NOLOCK` on high-volume tables). It accepts `Vendors`, `dbo.Vendors`, `[archive].[PO]` or `EDS.dbo.PO`.
+- **`get_table_detail(table_name)`**: returns every column, index and gotcha for one table or view, plus `TOP 5` sample rows (with `NOLOCK` on high-volume tables). It accepts `Vendors`, `dbo.Vendors` or `[archive].[PO]`.
 - **`run_query(sql)`**: validates, rewrites and executes the query. The result shows any rewritten SQL, advisory notes (such as a high-volume table or an archive scan) and the rows as a markdown table.
 - **`explain_query(sql)`**: returns `SET SHOWPLAN_XML` output, so nothing is executed. It shows estimated cost and rows, flags scans on tables with ≥1M rows, lists missing-index hints and reports implicit-conversion warnings.
 
@@ -41,7 +41,7 @@ The guard rejects the following. It checks comments, string literals and `[brack
 - Anything other than exactly one `SELECT` / `WITH … SELECT` / `UNION` statement.
 - Writes and schema changes: `INSERT UPDATE DELETE MERGE DROP ALTER CREATE TRUNCATE SELECT … INTO`.
 - Executing code: `EXEC`, `sp_*`, `xp_*`.
-- Access outside the database: `OPENROWSET`, `OPENQUERY`, `OPENDATASOURCE`, `BULK`, 4-part linked-server names, and `master`/`msdb`/`tempdb`/`model`.
+- Access outside the database: `OPENROWSET`, `OPENQUERY`, `OPENDATASOURCE`, `BULK`, 4-part linked-server names, and any 3-part (database-qualified) name, including `master`/`msdb`/`tempdb`/`model`. Queries must use `schema.table` in the connected database.
 - Session and transaction control: `SET DECLARE USE BEGIN COMMIT WAITFOR`, plus `DBCC`, `BACKUP`, `KILL` and similar.
 - Unterminated strings or comments.
 
@@ -90,7 +90,7 @@ eds-rag check-sql "SELECT * FROM dbo.CrossRefs WHERE ItemId = 42"
 | `EDS_QUERY_TIMEOUT` | `10` | Seconds, applied as the query timeout and `LOCK_TIMEOUT` |
 | `EDS_SAMPLE_ROWS` | `5` | Sample rows in `get_table_detail` |
 | `EDS_AUDIT_LOG` | *(off)* | JSONL audit log of every query and plan request |
-| `EDS_RAG_SEED` | `seed/eds_seed.yaml` | Seed annotations file |
+| `EDS_RAG_SEED` | `eds_rag/data/eds_seed.yaml` | Seed annotations file |
 | `EDS_ALLOW_WRITABLE_LOGIN` | *(off)* | `1` skips the read-only login check. Only for a throwaway local DB. |
 
 ### Embedders
@@ -128,11 +128,11 @@ if the corpus grows by orders of magnitude.
 5. With `--apply`, rebuilds the index.
 
 It exits with `2` when there is drift, so cron or CI can alert on it. New tables show up under
-"need a seed description". That list is your to-do for extending `seed/eds_seed.yaml`.
+"need a seed description". That list is your to-do for extending `eds_rag/data/eds_seed.yaml`.
 
 ## Curating the seed
 
-`seed/eds_seed.yaml` holds the knowledge the catalog can't provide: what a table means in
+`eds_rag/data/eds_seed.yaml` holds the knowledge the catalog can't provide: what a table means in
 procurement terms, the synonyms people use and the gotchas. Only confident facts go there.
 `expected_joins` follow the `{Table}Id` convention and show up as "not a declared FK - verify"
 until introspection confirms the column exists. If the column is missing, the seed annotation is

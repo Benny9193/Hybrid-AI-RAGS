@@ -79,7 +79,7 @@ class DriftReport:
             out += ["", "## Row-count tier changes (informational)"]
             out += [f"- {c.name}: {c.tier_change}" for c in tiers]
         if self.stale_annotations:
-            out += ["", "## Stale seed annotations (fix seed/eds_seed.yaml)"]
+            out += ["", "## Stale seed annotations (fix the seed YAML)"]
             out += [f"- {s}" for s in self.stale_annotations]
         return "\n".join(out)
 
@@ -124,3 +124,12 @@ def diff_docs(old: list[TableDoc], new: list[TableDoc]) -> DriftReport:
         if change.structural or change.tier_change:
             report.changed.append(change)
     return report
+
+
+def docs_differ(old: list[TableDoc], new: list[TableDoc]) -> bool:
+    """True if the stored docs are stale in *any* way (structure, seed text, row counts)."""
+
+    def by_name(docs: list[TableDoc]) -> dict[str, dict]:
+        return {d.full_name.lower(): d.to_dict() for d in docs}
+
+    return by_name(old) != by_name(new)
